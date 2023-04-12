@@ -28,7 +28,7 @@ class SamPredictor:
         """
         super().__init__()
         self.model = sam_model
-        self.transform = ResizeLongestSide(sam_model.image_encoder.img_size)
+        self.transform = ResizeLongestSide(sam_model.module.image_encoder.img_size)
         self.reset_image()
 
     def set_image(
@@ -49,13 +49,16 @@ class SamPredictor:
             "RGB",
             "BGR",
         ], f"image_format must be in ['RGB', 'BGR'], is {image_format}."
-        if image_format != self.model.image_format:
+        if image_format != self.model.module.image_format:
             image = image[..., ::-1]
 
         # Transform the image to the form expected by the model
         input_image = self.transform.apply_image(image)
         input_image_torch = torch.as_tensor(input_image, device=self.device)
-        input_image_torch = input_image_torch.permute(2, 0, 1).contiguous()[None, :, :, :]
+        input_image_torch = input_image_torch.permute(2,0,1)
+        input_image_torch = input_image_torch.contiguous()
+        input_image_torch = input_image_torch[None,:,:,:]
+        # input_image_torch = input_image_torch.permute(2, 0, 1).contiguous()[None, :, :, :]
 
         self.set_torch_image(input_image_torch, image.shape[:2])
 
@@ -79,14 +82,14 @@ class SamPredictor:
         assert (
             len(transformed_image.shape) == 4
             and transformed_image.shape[1] == 3
-            and max(*transformed_image.shape[2:]) == self.model.image_encoder.img_size
+            and max(*transformed_image.shape[2:]) == self.model.module.image_encoder.img_size
         ), f"set_torch_image input must be BCHW with long side {self.model.image_encoder.img_size}."
         self.reset_image()
 
         self.original_size = original_image_size
         self.input_size = tuple(transformed_image.shape[-2:])
-        input_image = self.model.preprocess(transformed_image)
-        self.features = self.model.image_encoder(input_image)
+        input_image = self.model.module.preprocess(transformed_image)
+        self.features = self.model.module.image_encoder(input_image)
         self.is_image_set = True
 
     def predict(
@@ -219,26 +222,26 @@ class SamPredictor:
             points = None
 
         # Embed prompts
-        sparse_embeddings, dense_embeddings = self.model.prompt_encoder(
+        sparse_embeddings,dense_embeddings = self.model.module.prompt_encoder(
             points=points,
             boxes=boxes,
             masks=mask_input,
         )
 
         # Predict masks
-        low_res_masks, iou_predictions = self.model.mask_decoder(
+        low_res_masks, iou_predictions = self.model.module.mask_decoder(
             image_embeddings=self.features,
-            image_pe=self.model.prompt_encoder.get_dense_pe(),
+            image_pe=self.model.module.prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
             multimask_output=multimask_output,
         )
 
         # Upscale the masks to the original image resolution
-        masks = self.model.postprocess_masks(low_res_masks, self.input_size, self.original_size)
+        masks = self.model.module.postprocess_masks(low_res_masks, self.input_size, self.original_size)
 
         if not return_logits:
-            masks = masks > self.model.mask_threshold
+            masks = masks > self.model.module.mask_threshold
 
         return masks, iou_predictions, low_res_masks
 
@@ -257,7 +260,7 @@ class SamPredictor:
 
     @property
     def device(self) -> torch.device:
-        return self.model.device
+        return self.model.module.device
 
     def reset_image(self) -> None:
         """Resets the currently set image."""
